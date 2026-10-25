@@ -43,12 +43,14 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'tracker.middleware.CorsMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -74,10 +76,12 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
+DB_DIR = Path(os.environ.get("DB_DIR", BASE_DIR))
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': DB_DIR / 'db.sqlite3',
         'OPTIONS': {'timeout': 20}
     }
 }
@@ -118,7 +122,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
-
+STATIC_ROOT = BASE_DIR / "staticfiles"
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
@@ -128,3 +133,13 @@ MAILERS = {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
 }
+
+# CivicAPI
+CIVICAPI_BASE_URL = os.environ.get("CIVICAPI_BASE_URL", "https://civicapi.org/api/v2")
+CIVICAPI_TIMEOUT = float(os.environ.get("CIVICAPI_TIMEOUT", "20"))
+CIVICAPI_ENDPOINTS = {
+    "status": os.environ.get("CIVICAPI_EP_STATUS", "status"),
+    "races": os.environ.get("CIVICAPI_EP_RACES", "races"),
+}
+CIVICAPI_POLL_SECONDS = int(os.environ.get("CIVICAPI_POLL_SECONDS", "60"))
+CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
