@@ -12,7 +12,8 @@ dependencies = [
     "django (>=6.1.2,<7.0.0)",
     "requests (>=2.34.2,<3.0.0)",
     "gunicorn (>=26.2.0,<27.0.0)",
-    "whitenoise (>=6.12.0,<7.0.0)"
+    "whitenoise (>=6.12.0,<7.0.0)",
+    "python-decouple (>=3.8,<4.0)",
 ]
 
 
