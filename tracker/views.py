@@ -3,7 +3,8 @@ from django.db.models import Max
 from django.http import Http404, JsonResponse
  
 from .models import EarlyVoteSnapshot, Election, Race, ResultSnapshot, SyncLog
- 
+
+__author__ = "Mustafa Prodhan"
 RATERS = ("cook", "sabato", "inside")
  
  

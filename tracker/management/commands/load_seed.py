@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from tracker.services import load_seed
  
- 
+__author__ = "Mustafa Prodhan"
 class Command(BaseCommand):
     help = "Load the compiled 2026 midterm races, ratings and early-vote baseline."
  

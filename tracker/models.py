@@ -1,5 +1,6 @@
 from django.db import models
 
+__author__ = "Mustafa Prodhan"
 class Election(models.Model):
     # Focus on the data model for any year, not just midterms.
     year = models.PositiveBigIntegerField()
@@ -41,15 +42,25 @@ class Race(models.Model):
 
     @property
     def label(self):
-        return f"{self.state}--{self.district}" if self.district else self.state
+        return f"{self.state}-{self.district}" if self.district else self.state
 
     def __str__(self):
         return f"{self.election.year} {self.office} {self.label}"
 
 class Candidate(models.Model):
-    race = models.ForeignKey(Race, on_delete=models.CASCADE, related_name="cendidates")
+    race = models.ForeignKey(Race, on_delete=models.CASCADE, related_name="candidates")
+    name = models.CharField(max_length=120)
+    party = models.CharField(max_length=40, blank=True)
+    is_incumbent = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = [("race", "name")]
+
+class Rating(models.Model):
+    # Forecast rating from a rater (cook / sabato / inside).
+    race = models.ForeignKey(Race, on_delete=models.CASCADE, related_name="ratings")
     rater = models.CharField(max_length=20)
-    rating = models.CharField(max_length=30) # Lean D, Tossup, "Solid Republican, etc
+    rating = models.CharField(max_length=30)  # e.g. "Lean D", "Tossup", "Solid Republican"
     as_of = models.CharField(max_length=40, blank=True)
 
     class Meta:
@@ -70,7 +81,7 @@ class ResultSnapshot(models.Model):
         ordering = ["-fetched_at"]
         get_latest_by = "fetched_at"
 
-class CandidaeResult(models.Model):
+class CandidateResult(models.Model):
     snapshot = models.ForeignKey(ResultSnapshot, on_delete=models.CASCADE, related_name="results")
     name = models.CharField(max_length=120)
     party = models.CharField(max_length=40, blank=True)

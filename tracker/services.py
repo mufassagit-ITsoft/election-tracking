@@ -8,13 +8,14 @@ from . import civicapi
 from .models import (Candidate, CandidateResult, EarlyVoteSnapshot, Election, Race, Rating,
                      ResultSnapshot, SyncLog)
  
+__author__ = "Mustafa Prodhan"
 SEED_PATH = Path(__file__).parent / "seed" / "midterm_2026.json"
 RATER_MAP = {"cook": 0, "sabato": 1, "inside": 2}
  
  
 @transaction.atomic
 def load_seed(path=SEED_PATH):
-    # Load the compiled 2026 midterm dataset (races, ratings, early vote baseline).
+    """Load the compiled 2026 midterm dataset (races, ratings, early vote baseline)."""
     s = json.loads(Path(path).read_text())
     e = s["election"]
     el, _ = Election.objects.get_or_create(
@@ -80,7 +81,7 @@ def _find_race(el, n):
  
 @transaction.atomic
 def apply_races_payload(el, payload):
-    # Store one ResultSnapshot per matched race.
+    """Store one ResultSnapshot per matched race. Returns (stored, unmatched)."""
     stored, unmatched = 0, []
     for item in civicapi.extract_races(payload):
         n = civicapi.normalize_race(item)
@@ -101,10 +102,39 @@ def apply_races_payload(el, payload):
  
 def sync_results(el, **params):
     try:
-        stored, unmatched = apply_races_payload(el, civicapi.get("races", **params))
+        stored, unmatched = apply_races_payload(el, civicapi.fetch_general_races(str(el.date)))
         SyncLog.objects.create(kind="results", detail=f"stored={stored} unmatched={len(unmatched)}")
         return stored, unmatched
     except Exception as exc:  # network/shape problems must not kill the poll loop
         SyncLog.objects.create(kind="results", ok=False, detail=repr(exc)[:500])
         raise
+ 
+ 
+def sync_early_vote(el):
+    """Pull national early-vote snapshots (by state) and store one EarlyVoteSnapshot per state."""
+    cats, as_of = {}, None
+    for cat in ("requested", "returned", "inperson"):
+        d = civicapi.fetch_early_vote(cat)
+        as_of = d.get("snapshot_date") or as_of
+        cats[cat] = d.get("regions", {})
+    as_of = date.fromisoformat(as_of) if as_of else date.today()
+    n = 0
+    for st in sorted(set().union(*[set(v) for v in cats.values()])):
+        def tot(cat, key=None):
+            r = cats[cat].get(st, {})
+            return sum(v["votes"] for k, v in r.items() if key is None or k == key)
+        mail, inp = tot("returned"), tot("inperson")
+        prior = (EarlyVoteSnapshot.objects.filter(election=el, state=st, prior_final__isnull=False)
+                 .order_by("-as_of").values_list("prior_final", flat=True).first())
+        EarlyVoteSnapshot.objects.update_or_create(
+            election=el, state=st, as_of=as_of,
+            defaults=dict(total=mail + inp, mail_requested=tot("requested"), mail_returned=mail,
+                          in_person=inp, dem=tot("returned", "Democratic") + tot("inperson", "Democratic"),
+                          rep=tot("returned", "Republican") + tot("inperson", "Republican"),
+                          other=tot("returned", "Other") + tot("inperson", "Other"),
+                          no_affiliation=tot("returned", "Unspecified") + tot("inperson", "Unspecified"),
+                          prior_final=prior, source="civicapi"))
+        n += 1
+    SyncLog.objects.create(kind="early_vote", detail=f"states={n} as_of={as_of}")
+    return n
  

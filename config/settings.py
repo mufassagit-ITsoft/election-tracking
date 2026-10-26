@@ -9,6 +9,7 @@ https://docs.djangoproject.com/en/6.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
+__author__ = "Mustafa Prodhan"
 import os
 from pathlib import Path
 from decouple import config
@@ -138,8 +139,15 @@ MAILERS = {
 CIVICAPI_BASE_URL = os.environ.get("CIVICAPI_BASE_URL", "https://civicapi.org/api/v2")
 CIVICAPI_TIMEOUT = float(os.environ.get("CIVICAPI_TIMEOUT", "20"))
 CIVICAPI_ENDPOINTS = {
-    "status": os.environ.get("CIVICAPI_EP_STATUS", "status"),
-    "races": os.environ.get("CIVICAPI_EP_RACES", "races"),
+    "status": "status",
+    "search": "race/search",
+    "race": "race",
+    "early_vote": "early-vote",
+}
+CIVICAPI_OFFICE_TYPES = {
+    "senate": ["Senate"],
+    "governor": ["Governor"],
+    "house": ["House", "US House", "House of Representatives"],
 }
 CIVICAPI_POLL_SECONDS = int(os.environ.get("CIVICAPI_POLL_SECONDS", "60"))
 CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")

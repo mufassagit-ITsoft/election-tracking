@@ -1,5 +1,6 @@
 from django.conf import settings
 
+__author__ = "Mustafa Prodhan"
 class CorsMiddleware:
     # Read-only daa service: allow a separate map front to fetch the JSON data.
     def __init__(self, get_response):

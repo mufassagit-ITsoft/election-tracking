@@ -1,6 +1,7 @@
 from django.urls import path
 from . import views
- 
+
+__author__ = "Mustafa Prodhan"
 urlpatterns = [
     path("health/", views.health),
     path("elections/", views.elections),

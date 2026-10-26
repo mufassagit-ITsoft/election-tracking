@@ -2,7 +2,7 @@ import json
 from django.core.management.base import BaseCommand
 from tracker import civicapi
  
- 
+__author__ = "Mustafa Prodhan"
 class Command(BaseCommand):
     help = "GET a CivicAPI endpoint and print the raw shape, to confirm FIELD_MAP / endpoint paths."
  

@@ -4,7 +4,7 @@ from tracker import civicapi
 from tracker.models import Election, Race, ResultSnapshot
 from tracker.services import apply_races_payload, load_seed
  
- 
+__author__ = "Mustafa Prodhan"
 class SeedTests(TestCase):
     def test_seed_counts(self):
         el, n = load_seed()
