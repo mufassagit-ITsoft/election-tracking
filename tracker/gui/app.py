@@ -6,7 +6,7 @@ from tkinter import ttk
  
 from django.db import close_old_connections
  
-from tracker import services
+from tracker import poller as poll, services
 from tracker.models import Election
 from . import mapdata as md
  
@@ -23,8 +23,10 @@ class MapApp:
         self.office = tk.StringVar(value="senate")
         self.mode = tk.StringVar(value="rating")
         self.rater = tk.StringVar(value="cook")
-        self.auto = tk.BooleanVar(value=False)
-        self.every = tk.IntVar(value=60)
+        self.bg = tk.BooleanVar(value=True)
+        self.poller = None
+        self.lock = poll.Lock()
+        self.pstatus = tk.StringVar(value="")
         self.status = tk.StringVar(value="")
         self.items = {}        # canvas item id -> key
         self.data = {}
@@ -34,7 +36,43 @@ class MapApp:
         self._shapes = None
         self._build()
         self.reload()
+        self._toggle_poller()
         self._tick()
+        root.protocol("WM_DELETE_WINDOW", self._close)
+ 
+    # background poller
+    def _toggle_poller(self):
+        if self.bg.get() and not self.poller:
+            if self.lock.acquire():
+                self.poller = poll.Poller(self.year)
+                self.poller.start_thread()
+            else:
+                self.pstatus.set("Poller already running in another process (run_poller); showing its data")
+                return
+        elif not self.bg.get() and self.poller:
+            self.poller.stop.set()
+            self.poller = None
+            self.lock.release()
+        self._poller_line()
+ 
+    def _poller_line(self):
+        if self.poller:
+            who = "Poller ON (this window)"
+        elif self.lock.fh is None and self.bg.get():
+            who = "Poller running in another process"
+        else:
+            who = "Poller OFF"
+        close_old_connections()
+        bits = []
+        for job, st in poll.status().items():
+            bits.append(f"{job} {st['at'].astimezone():%H:%M:%S}" + ("" if st["ok"] else " FAILED"))
+        self.pstatus.set(who + ("   |   last run: " + ", ".join(bits) if bits else "   |   no runs yet"))
+ 
+    def _close(self):
+        if self.poller:
+            self.poller.stop.set()
+        self.lock.release()
+        self.root.destroy()
  
     # layout
     def _build(self):
@@ -49,9 +87,8 @@ class MapApp:
         ttk.Button(top, text="Reload", command=self.reload).pack(side="left", padx=(14, 2))
         self.pull_btn = ttk.Button(top, text="Pull from CivicAPI", command=self.pull)
         self.pull_btn.pack(side="left", padx=2)
-        ttk.Checkbutton(top, text="Auto every", variable=self.auto).pack(side="left", padx=(10, 0))
-        ttk.Spinbox(top, from_=15, to=900, increment=15, width=4, textvariable=self.every).pack(side="left")
-        ttk.Label(top, text="s").pack(side="left")
+        ttk.Checkbutton(top, text="Background poller", variable=self.bg,
+                        command=self._toggle_poller).pack(side="left", padx=(12, 0))
         ttk.Label(top, text="Data: civicapi.org", foreground="#666").pack(side="right")
  
         body = ttk.Frame(self.root)
@@ -60,6 +97,7 @@ class MapApp:
         self.canvas.pack(side="left", fill="both", expand=True)
         self.detail = tk.Text(body, width=46, wrap="word", font=("TkFixedFont", 10), padx=8, pady=8)
         self.detail.pack(side="right", fill="y")
+        ttk.Label(self.root, textvariable=self.pstatus, relief="sunken", anchor="w", padding=3).pack(fill="x")
         ttk.Label(self.root, textvariable=self.status, relief="sunken", anchor="w", padding=3).pack(fill="x")
         self.canvas.bind("<Configure>", lambda e: self.draw())
         self.canvas.bind("<Motion>", self._hover)
@@ -101,11 +139,12 @@ class MapApp:
                 self.status.set(msg)
         except queue.Empty:
             pass
-        if self.auto.get():
-            self._countdown = getattr(self, "_countdown", 0) - 1
-            if self._countdown <= 0:
-                self._countdown = max(15, self.every.get())
-                self.pull()
+        self._n = getattr(self, "_n", 0) + 1
+        if self._n % 10 == 0:                 # every 10 s re-read SQLite (the poller writes it)
+            self._poller_line()
+            if not self._busy:
+                self.reload()
+                self._show_detail(self.selected)
         self.root.after(1000, self._tick)
  
     # drawing
@@ -201,6 +240,11 @@ class MapApp:
             return
         self.selected = k
         self._outline(k)
+        self._show_detail(k)
+ 
+    def _show_detail(self, k):
+        if not k:
+            return
         d = self.data.get(k)
         self.detail.delete("1.0", "end")
         if d and d["race_id"]:

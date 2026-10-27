@@ -1,0 +1,18 @@
+# Keeps the poller running in the background on Ubuntu, even with the map window closed.
+# Install (no root needed):
+#   1. Edit PROJECT below to your project folder.
+#   2. mkdir -p ~/.config/systemd/user && cp deploy/election-poller.service ~/.config/systemd/user/
+#   3. systemctl --user daemon-reload && systemctl --user enable --now election-poller
+#   4. loginctl enable-linger $USER      # keep it running after logout / across reboots
+# Watch it:  journalctl --user -u election-poller -f      Stop:  systemctl --user stop election-poller
+[Unit]
+Description=Election Tracker poller (early vote + election-night results)
+
+[Service]
+WorkingDirectory=/home/mufassa/Documents/Compfiles/python/Django/election_tracker
+ExecStart=/home/mufassa/Documents/Compfiles/python/Django/election_tracker/.venv/bin/python manage.py run_poller
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target
