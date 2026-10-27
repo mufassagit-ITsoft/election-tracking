@@ -1,12 +1,12 @@
 # Map data for the GUI and read from SQLite. 
 
 import math
-
+ 
 from tracker.models import (CandidateResult, EarlyVoteSnapshot, Election, Forecast, MapShape,
                             Race, ResultSnapshot)
-
+ 
 __author__ = "Mustafa Prodhan"
-
+ 
 NO_DATA = "#d4d4d4"
 TOSSUP = "#e0bb24"
 OTHER = "#8b7ab8"
@@ -19,7 +19,7 @@ MODES = ("rating", "results", "early")
  
  
 def rating_side_strength(text):
-    # 'Lean R (flip)' -> ('R', 1); 'Toss Up' -> ('T', 0); None/'' -> (None, 0).
+    """'Lean R (flip)' -> ('R', 1); 'Toss Up' -> ('T', 0); None/'' -> (None, 0)."""
     t = (text or "").lower().replace("(flip)", "").strip()
     if not t:
         return None, 0
@@ -74,7 +74,7 @@ def legend(mode):
             ("Likely R", R_SHADES[2]), ("Solid R", R_SHADES[3]), ("unrated", NO_DATA)]
  
  
-# projection
+# projection 
 class _Albers:
     def __init__(self, lat1, lat2, lat0, lon0):
         r = math.radians
@@ -135,7 +135,7 @@ def tile_squares():
             for s in MapShape.objects.filter(layer="house_tiles")}
  
  
-# data
+# data 
 def _latest_snapshots(el, office):
     seen, snaps = {}, []
     for s in ResultSnapshot.objects.filter(race__election=el, race__office=office).order_by("race_id", "-fetched_at"):
@@ -149,14 +149,14 @@ def _latest_snapshots(el, office):
  
  
 def early_by_state(el):
-    # {state: {'total', 'pct_of_prior', 'as_of', ...}} from the newest EarlyVoteSnapshot per state.
+    """-> {state: {'total', 'pct_of_prior', 'as_of', ...}} from the newest EarlyVoteSnapshot per state."""
     out = {}
     for e in EarlyVoteSnapshot.objects.filter(election=el).order_by("state", "-as_of", "-fetched_at"):
         if e.state not in out and e.total is not None:
             out[e.state] = dict(total=e.total, pct_of_prior=e.pct_of_prior, as_of=e.as_of,
                                 prior_final=e.prior_final, mail_requested=e.mail_requested,
                                 mail_returned=e.mail_returned, in_person=e.in_person,
-                                dem=e.dem, rep=e.rep, other=e.other)
+                                dem=e.dem, rep=e.rep, other=e.other, unaffiliated=e.no_affiliation)
     return out
  
  
@@ -208,11 +208,12 @@ def state_early_detail(year, state):
     return "\n".join([f"{year} EARLY VOTE  {state} (no {year} race of this office)",
                       f"  total {e['total']:,}" + (f"  = {e['pct_of_prior']}% of 2024 final" if e["pct_of_prior"] is not None else ""),
                       f"  requested {e['mail_requested'] or 0:,}  returned {e['mail_returned'] or 0:,}  in person {e['in_person'] or 0:,}",
-                      f"  D {e['dem'] or 0:,}  R {e['rep'] or 0:,}  other {e['other'] or 0:,}   as of {e['as_of']}"])
+                      f"  D {e['dem'] or 0:,}  R {e['rep'] or 0:,}  other {e['other'] or 0:,}  "
+                      f"unaffiliated {e['unaffiliated'] or 0:,}   as of {e['as_of']}"])
  
  
 def race_detail(race_id):
-    # Plain-text detail panel for one race.
+    """Plain-text detail panel for one race."""
     r = Race.objects.select_related("election").filter(pk=race_id).first()
     if not r:
         return ""
@@ -242,7 +243,8 @@ def race_detail(race_id):
     if e:
         L.append(f"  total {e['total']:,}" + (f"  = {e['pct_of_prior']}% of 2024 final" if e["pct_of_prior"] is not None else ""))
         L.append(f"  requested {e['mail_requested'] or 0:,}  returned {e['mail_returned'] or 0:,}  in person {e['in_person'] or 0:,}")
-        L.append(f"  D {e['dem'] or 0:,}  R {e['rep'] or 0:,}  other {e['other'] or 0:,}   as of {e['as_of']}")
+        L.append(f"  D {e['dem'] or 0:,}  R {e['rep'] or 0:,}  other {e['other'] or 0:,}  "
+                 f"unaffiliated {e['unaffiliated'] or 0:,}   as of {e['as_of']}")
     else:
         L.append("  none")
     return "\n".join(L)

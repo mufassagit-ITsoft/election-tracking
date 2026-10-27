@@ -1,10 +1,10 @@
-from django.test import TestCase
+from django.test import TestCase, override_settings
  
 from tracker import civicapi
 from tracker.models import Election, Race, ResultSnapshot
 from tracker.services import apply_races_payload, load_seed
  
-__author__ = "Mustafa Prodhan"
+ 
 class SeedTests(TestCase):
     def test_seed_counts(self):
         el, n = load_seed()
@@ -17,6 +17,7 @@ class SeedTests(TestCase):
         self.assertEqual(c, Race.objects.count())
  
  
+@override_settings(CIVICAPI_IGNORE_PREELECTION=False)
 class IngestTests(TestCase):
     def setUp(self):
         self.el, _ = load_seed()
@@ -53,3 +54,34 @@ class ApiTests(TestCase):
         self.assertEqual(len(self.client.get("/api/2026/map/house/").json()["features"]), 435)
         self.assertEqual(self.client.get("/api/2099/races/").status_code, 404)
  
+ 
+class NormalizeStatewideTests(TestCase):
+    def test_statewide_district_is_blank(self):
+        n = civicapi.normalize_race({"type": "Governor", "province": "AZ", "district": "AZ"})
+        self.assertEqual((n["office"], n["state"], n["district"]), ("governor", "AZ", ""))
+ 
+ 
+class PreElectionGuardTests(TestCase):
+    PAYLOAD = {"races": [{"id": "x1", "type": "US Senate", "province": "OH", "percent_reporting": 100,
+                          "candidates": [{"name": "A", "party": "Republican", "votes": 5, "winner": True},
+                                         {"name": "B", "party": "Democratic", "votes": 3}]}]}
+ 
+    def setUp(self):
+        self.el, _ = load_seed()
+ 
+    def _apply(self, now):
+        from datetime import datetime, timezone as tz
+        from unittest import mock
+        stats = {}
+        with mock.patch("tracker.services.timezone.now", return_value=datetime(*now, tzinfo=tz.utc)):
+            return apply_races_payload(self.el, self.PAYLOAD, stats), stats
+ 
+    def test_results_before_election_day_are_ignored(self):
+        (stored, un), stats = self._apply((2026, 10, 27, 17))
+        self.assertEqual((stored, un, stats["skipped"]), (0, [], 1))
+        self.assertEqual(ResultSnapshot.objects.count(), 0)
+ 
+    def test_results_after_polls_open_are_stored(self):
+        (stored, un), stats = self._apply((2026, 11, 4, 3))
+        self.assertEqual((stored, stats["skipped"]), (1, 0))
+        self.assertTrue(ResultSnapshot.objects.get().called)

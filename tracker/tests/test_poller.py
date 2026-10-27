@@ -64,3 +64,53 @@ class LockTests(TestCase):
             a.release()
             self.assertTrue(b.acquire())
             b.release()
+ 
+ 
+class SafetyTests(TestCase):
+    def test_paging_is_capped_and_stops_past_the_date(self):
+        from tracker import civicapi
+        row = {"id": 1, "type": "US Senate", "province": "OH", "election_type": "General",
+               "election_name": "x", "election_date": "2026-11-03T05:00:00Z"}
+        old = {**row, "election_date": "2022-11-08T05:00:00Z"}
+        calls = []
+ 
+        def fake(key, suffix="", **p):
+            calls.append(p["offset"])
+            return {"races": [row] * 1000}            # every row on the date: would run away if uncapped
+        with mock.patch.object(civicapi, "get", fake), mock.patch.object(civicapi.time, "sleep"), \
+             mock.patch.object(civicapi, "OFFICE_QUERIES", {"senate": [{"type": "US Senate", "election_type": "General"}]}), \
+             self.settings(CIVICAPI_MAX_PAGES=3):
+            civicapi.fetch_general_races("2026-11-03")
+        self.assertEqual(calls, [0, 1000, 2000])
+ 
+        calls.clear()
+ 
+        def fake2(key, suffix="", **p):
+            calls.append(p["offset"])
+            return {"races": [row] * 10 + [old] * 990}  # a full page that already reaches older elections
+        with mock.patch.object(civicapi, "get", fake2), mock.patch.object(civicapi.time, "sleep"), \
+             mock.patch.object(civicapi, "OFFICE_QUERIES", {"senate": [{"type": "US Senate", "election_type": "General"}]}), \
+             self.settings(CIVICAPI_MAX_PAGES=3):
+            out = civicapi.fetch_general_races("2026-11-03")
+        self.assertEqual(calls, [0])                  # stopped: nothing more on the date beyond this page
+        self.assertEqual(len(out), 10)
+ 
+    def test_failure_backs_off(self):
+        load_seed()
+        p = poller.Poller(2026)
+        with mock.patch.object(poller.services, "sync_results", side_effect=RuntimeError("503")):
+            p.run_once(force=("results",)); first = p.last["results"]
+            p.run_once(force=("results",)); second = p.last["results"]
+        self.assertGreater(first, datetime.now(tz.utc).timestamp())
+        self.assertGreater(second - first, 10)
+ 
+ 
+class RetryTests(TestCase):
+    def test_session_retries_transient_errors(self):
+        from tracker import civicapi
+        civicapi._session = None
+        a = civicapi._get_session().get_adapter("https://civicapi.org").max_retries
+        self.assertEqual(a.total, 3)
+        self.assertIn(503, a.status_forcelist)
+        self.assertIn(429, a.status_forcelist)
+ 

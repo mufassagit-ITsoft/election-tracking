@@ -1,0 +1,15 @@
+.venv/
+.git/
+.env
+*.sqlite3
+*.sqlite3-*
+poller.lock
+__pycache__/
+*.pyc
+staticfiles/
+.pytest_cache/
+.vscode/
+deploy/
+data/
+**/*.sqlite3
+**/*.sqlite3-*

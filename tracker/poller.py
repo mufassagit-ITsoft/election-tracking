@@ -33,7 +33,7 @@ JOBS = ("results", "early", "detail", "forecast")   # run in this order
  
  
 def phase(now, election_date):
-    # 'night' = election day 6am ET through 3 days later: counts, calls and late ballots.
+    """'night' = election day 10:00 UTC (6am ET) through 3 days later: counts, calls and late ballots."""
     start = datetime(election_date.year, election_date.month, election_date.day, 10, tzinfo=dt_tz.utc)
     if now < start:
         return "pre"
@@ -41,14 +41,14 @@ def phase(now, election_date):
  
  
 def due_jobs(now, election_date, last, overrides=None):
-    # [job names] whose interval has passed. last: {job: epoch seconds}; overrides: {job: seconds}.
+    """-> [job names] whose interval has passed. last: {job: epoch seconds}; overrides: {job: seconds}."""
     iv = {**INTERVALS[phase(now, election_date)], **(overrides or {})}
     t = now.timestamp()
     return [j for j in JOBS if t - last.get(j, 0) >= iv[j]]
  
  
 class Lock:
-    # Non-blocking file lock next to the database.
+    """Non-blocking file lock next to the database; held for the life of the poller."""
     def __init__(self, path=None):
         self.path = Path(path or Path(settings.DB_DIR) / "poller.lock")
         self.fh = None
@@ -72,7 +72,7 @@ class Lock:
  
  
 def status():
-    # {job: {'at': datetime, 'ok': bool, 'detail': str}} from SyncLog (what the GUI shows).
+    """-> {job: {'at': datetime, 'ok': bool, 'detail': str}} from SyncLog (what the GUI shows)."""
     out = {}
     for job, kind in LOGKIND.items():
         s = SyncLog.objects.filter(kind=kind).first()
@@ -86,6 +86,7 @@ class Poller:
         self.year, self.overrides, self.log = year, overrides or {}, log or (lambda m: None)
         self.stop = threading.Event()
         self.last = {}
+        self.fails = {}
         self._seeded = False
  
     def _seed_last(self):
@@ -98,8 +99,10 @@ class Poller:
  
     def _run_job(self, job, el):
         if job == "results":
-            stored, unmatched = services.sync_results(el)
-            return f"results stored={stored} unmatched={len(unmatched)}"
+            stats = {}
+            stored, unmatched = services.sync_results(el, stats)
+            return (f"results stored={stored} unmatched={len(unmatched)} "
+                    f"ignored_pre_election={stats.get('skipped', 0)}")
         if job == "early":
             return f"early states={services.sync_early_vote(el)}"
         if job == "detail":
@@ -108,35 +111,42 @@ class Poller:
         return f"forecast stored={n} unmatched={un}"
  
     def run_once(self, now=None, force=None):
-        # Run every job that is due (or `force`d). Failures are logged and never stop the loop.
+        """Run every job that is due (or `force`d). Failures are logged and never stop the loop."""
         close_old_connections()
         el = Election.objects.filter(year=self.year).first()
         if not el:
-            self.log("no election loaded; run load_seed")
-            return []
+            self.log("no election loaded yet (run load_seed); waiting")
+            return None
         if not self._seeded:
             self._seed_last()
         now = now or timezone.now()
         jobs = list(force) if force else due_jobs(now, el.date, self.last, self.overrides)
         ran = []
         for job in jobs:
-            self.last[job] = now.timestamp() # also on failure, so errors don't cause a retry storm
+            self.last[job] = now.timestamp()          # also on failure, so errors don't cause a retry storm
             try:
                 self.log(f"[{phase(now, el.date)}] {self._run_job(job, el)}")
+                self.fails[job] = 0
             except Exception as exc:
                 SyncLog.objects.create(kind=LOGKIND[job], ok=False, detail=repr(exc)[:500])
-                self.log(f"{job} failed: {exc!r}")
+                self.fails[job] = self.fails.get(job, 0) + 1
+                backoff = min(600, 15 * 2 ** self.fails[job])      # push the next try further out each failure
+                self.last[job] = now.timestamp() + backoff
+                self.log(f"{job} failed ({self.fails[job]}x, backing off {backoff}s): {exc!r}")
             ran.append(job)
         return ran
  
     def run_forever(self, tick=5):
         try:
             while not self.stop.is_set():
+                wait = tick
                 try:
-                    self.run_once()
-                except Exception as exc:  # DB hiccup etc.: keep the loop alive
+                    if self.run_once() is None:         # database not migrated/seeded yet: check less often
+                        wait = 30
+                except Exception as exc:               # DB hiccup etc.: keep the loop alive
                     self.log(f"poller error: {exc!r}")
-                self.stop.wait(tick)
+                    wait = 30
+                self.stop.wait(wait)
         finally:
             close_old_connections()
  

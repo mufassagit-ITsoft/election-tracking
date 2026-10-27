@@ -4,7 +4,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
  
-from django.db import close_old_connections
+from django.db import OperationalError, close_old_connections
  
 from tracker import poller as poll, services
 from tracker.models import Election
@@ -64,9 +64,13 @@ class MapApp:
             who = "Poller OFF"
         close_old_connections()
         bits = []
-        for job, st in poll.status().items():
-            bits.append(f"{job} {st['at'].astimezone():%H:%M:%S}" + ("" if st["ok"] else " FAILED"))
-        self.pstatus.set(who + ("   |   last run: " + ", ".join(bits) if bits else "   |   no runs yet"))
+        try:
+            statuses = poll.status()
+        except OperationalError:
+            statuses = {}
+        for job, st in statuses.items():
+            bits.append(f"{job} {st['at']:%H:%M:%S}" + ("" if st["ok"] else " FAILED"))
+        self.pstatus.set(who + ("   |   last run (UTC): " + ", ".join(bits) if bits else "   |   no runs yet"))
  
     def _close(self):
         if self.poller:
@@ -106,8 +110,13 @@ class MapApp:
     # data
     def reload(self):
         close_old_connections()
-        self.data = md.layer_data(self.year, self.office.get(), self.mode.get(), self.rater.get())
-        self.status.set(md.summary_line(self.year, self.office.get(), self.mode.get(), self.rater.get()))
+        try:
+            self.data = md.layer_data(self.year, self.office.get(), self.mode.get(), self.rater.get())
+            self.status.set(md.summary_line(self.year, self.office.get(), self.mode.get(), self.rater.get()))
+        except OperationalError:   # tables not there yet: container still migrating, or wrong DB_DIR
+            self.data = {}
+            self.status.set("Database not ready (no tables yet). Wait for the container to finish "
+                            "'migrate + load_seed', or run them. Retrying every 10 s.")
         self.draw()
  
     def pull(self):
@@ -154,10 +163,13 @@ class MapApp:
         self.items.clear()
         w, h = max(c.winfo_width(), 200), max(c.winfo_height(), 200)
         legend_h = 34
-        if self.office.get() == "house":
-            self._draw_tiles(w, h - legend_h)
-        else:
-            self._draw_states(w, h - legend_h)
+        try:
+            if self.office.get() == "house":
+                self._draw_tiles(w, h - legend_h)
+            else:
+                self._draw_states(w, h - legend_h)
+        except OperationalError:
+            c.create_text(w / 2, (h - legend_h) / 2, text="Database not ready (no tables yet)", fill="#666")
         self._draw_legend(w, h)
         if self.selected:
             self._outline(self.selected)

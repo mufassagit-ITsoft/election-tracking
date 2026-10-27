@@ -139,15 +139,18 @@ MAILERS = {
 CIVICAPI_BASE_URL = os.environ.get("CIVICAPI_BASE_URL", "https://civicapi.org/api/v2")
 CIVICAPI_TIMEOUT = float(os.environ.get("CIVICAPI_TIMEOUT", "20"))
 CIVICAPI_ENDPOINTS = {
-    "status": "status",
-    "search": "race/search",
-    "race": "race",
-    "early_vote": "early-vote",
+    "status": os.environ.get("CIVICAPI_EP_STATUS", "status"),
+    "search": os.environ.get("CIVICAPI_EP_SEARCH", "race/search"),
+    "race": os.environ.get("CIVICAPI_EP_RACE", "race"),
+    "early_vote": os.environ.get("CIVICAPI_EP_EARLY", "early-vote"),
+    "forecast": os.environ.get("CIVICAPI_EP_FORECAST", "forecast"),
 }
 CIVICAPI_OFFICE_TYPES = {
     "senate": ["Senate"],
     "governor": ["Governor"],
     "house": ["House", "US House", "House of Representatives"],
 }
+CIVICAPI_MAX_PAGES = int(os.environ.get("CIVICAPI_MAX_PAGES", "3"))
+CIVICAPI_PAGE_DELAY = float(os.environ.get("CIVICAPI_PAGE_DELAY", "0.5"))
 CIVICAPI_POLL_SECONDS = int(os.environ.get("CIVICAPI_POLL_SECONDS", "60"))
-CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
+CIVICAPI_IGNORE_PREELECTION = os.environ.get("CIVICAPI_IGNORE_PREELECTION", "1") not in ("0", "false")

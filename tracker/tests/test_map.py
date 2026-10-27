@@ -1,6 +1,7 @@
+
 from unittest import mock
  
-from django.test import TestCase
+from django.test import TestCase, override_settings
  
 from tracker import civicapi
 from tracker.gui import mapdata as md
@@ -8,7 +9,8 @@ from tracker.models import EarlyVoteRegion, Forecast, MapShape, Rating
 from tracker.services import (apply_races_payload, load_geo, load_seed, sync_early_detail, sync_forecasts)
  
 __author__ = "Mustafa Prodhan"
-
+ 
+ 
 class ColorTests(TestCase):
     def test_rating_parse(self):
         f = md.rating_side_strength
@@ -26,6 +28,7 @@ class ColorTests(TestCase):
         self.assertNotEqual(md.early_color(0), md.early_color(100))
  
  
+@override_settings(CIVICAPI_IGNORE_PREELECTION=False)
 class MapDataTests(TestCase):
     def setUp(self):
         self.el, _ = load_seed()

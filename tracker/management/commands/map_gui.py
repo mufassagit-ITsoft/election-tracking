@@ -13,4 +13,7 @@ class Command(BaseCommand):
             from tracker.gui import app
         except ImportError as exc:
             raise CommandError("Tkinter is missing. On Ubuntu run: sudo apt install python3-tk") from exc
-        app.run(o["year"])
+        try:
+            app.run(o["year"])
+        except KeyboardInterrupt:
+            self.stdout.write("closed")

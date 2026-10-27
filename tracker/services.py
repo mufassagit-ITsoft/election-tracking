@@ -1,11 +1,13 @@
 import json
-from datetime import date
+from datetime import date, datetime, timezone as dt_tz
 from pathlib import Path
  
+from django.conf import settings
 from django.db import transaction
-from . import civicapi
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from . import geo
+ 
+from . import civicapi, geo
 from .models import (Candidate, CandidateResult, EarlyVoteRegion, EarlyVoteSnapshot, Election, Forecast,
                      MapShape, Race, Rating, ResultSnapshot, SyncLog)
  
@@ -80,15 +82,32 @@ def _find_race(el, n):
     return r
  
  
+def election_day_start(el):
+    # Results before this moment cannot be real counts: election day 6am ET.
+    d = date.fromisoformat(str(el.date))
+    return datetime(d.year, d.month, d.day, 10, tzinfo=dt_tz.utc)
+ 
+ 
+def _has_results(n):
+    return bool(n["called"] or n["winner"] or (n["percent_reporting"] or 0) > 0
+                or any((c["votes"] or 0) > 0 for c in n["candidates"]))
+ 
+ 
 @transaction.atomic
-def apply_races_payload(el, payload):
-    # Store one ResultSnapshot per matched race. Returns (stored, unmatched).
-    stored, unmatched = 0, []
+def apply_races_payload(el, payload, stats=None):
+    """Store one ResultSnapshot per matched race. Until election day starts, rows that carry votes, a winner or a
+    call are skipped (CIVICAPI_IGNORE_PREELECTION, default on): they are projections or placeholders, not counts."""
+    stored, unmatched, skipped = 0, [], 0
+    early = (getattr(settings, "CIVICAPI_IGNORE_PREELECTION", True)
+             and timezone.now() < election_day_start(el))
     for item in civicapi.extract_races(payload):
         n = civicapi.normalize_race(item)
         race = _find_race(el, n)
         if not race:
             unmatched.append(n["civic_id"] or f'{n["office"]}:{n["state"]}-{n["district"]}')
+            continue
+        if early and _has_results(n):
+            skipped += 1
             continue
         w = n["winner"] or {}
         snap = ResultSnapshot.objects.create(
@@ -96,15 +115,24 @@ def apply_races_payload(el, payload):
             called=n["called"], winner_name=w.get("name", ""), winner_party=w.get("party", ""), raw=n["raw"])
         for c in n["candidates"]:
             CandidateResult.objects.create(snapshot=snap, **{k: c[k] for k in ("name", "party", "votes", "percent", "is_winner")})
-            Candidate.objects.get_or_create(race=race, name=c["name"], defaults={"party": c["party"]})
+            Candidate.objects.update_or_create(race=race, name=c["name"], defaults={
+                "party": c["party"], "color": c["color"], "civic_id": c["civic_id"]})
+        upd = parse_datetime(str(n["updated"])) if n["updated"] else None
+        if upd:
+            Race.objects.filter(pk=race.pk).update(civic_updated=upd)
         stored += 1
+    if stats is not None:
+        stats["skipped"] = skipped
     return stored, unmatched
  
  
-def sync_results(el, **params):
+def sync_results(el, stats=None, **params):
+    # Pull + store results. Pass a dict as `stats` to learn how many pre-election rows were ignored.
     try:
-        stored, unmatched = apply_races_payload(el, civicapi.fetch_general_races(str(el.date)))
-        SyncLog.objects.create(kind="results", detail=f"stored={stored} unmatched={len(unmatched)}")
+        stats = {} if stats is None else stats
+        stored, unmatched = apply_races_payload(el, civicapi.fetch_general_races(str(el.date)), stats)
+        SyncLog.objects.create(kind="results", detail=f"stored={stored} unmatched={len(unmatched)} "
+                                                      f"ignored_pre_election={stats.get('skipped', 0)}")
         return stored, unmatched
     except Exception as exc:  # network/shape problems must not kill the poll loop
         SyncLog.objects.create(kind="results", ok=False, detail=repr(exc)[:500])
@@ -138,9 +166,11 @@ def sync_early_vote(el):
         n += 1
     SyncLog.objects.create(kind="early_vote", detail=f"states={n} as_of={as_of}")
     return n
-
+ 
+ 
 EARLY_CATEGORIES = ("requested", "returned", "inperson", "grace")
-
+ 
+ 
 def _store_early_regions(el, state, category, payload):
     snap = payload.get("snapshot_date")
     snap = date.fromisoformat(snap) if snap else date.today()
@@ -203,7 +233,7 @@ def sync_forecasts(el, offices=("senate", "governor", "house")):
  
  
 def load_geo(el=None):
-    # Put map geometry in SQLite. 
+    # Put map geometry in SQLite: state outlines + generated House tiles (from the House races loaded).
     n = 0
     for st, name, g in geo.state_features():
         MapShape.objects.update_or_create(layer="states", key=st, defaults={"name": name, "geometry": g})
