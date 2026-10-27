@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand
-from tracker.services import load_seed
+from tracker.services import load_geo, load_seed
  
 __author__ = "Mustafa Prodhan"
 class Command(BaseCommand):
@@ -11,3 +11,4 @@ class Command(BaseCommand):
     def handle(self, *a, **o):
         el, n = load_seed(o["path"]) if o.get("path") else load_seed()
         self.stdout.write(self.style.SUCCESS(f"{el}: {n}"))
+        self.stdout.write(self.style.SUCCESS(f"map shapes: {load_geo(el)}"))

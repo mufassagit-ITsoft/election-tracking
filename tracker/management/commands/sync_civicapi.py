@@ -2,7 +2,7 @@ import time
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from tracker.models import Election
-from tracker.services import sync_early_vote, sync_results
+from tracker.services import sync_early_vote, sync_results, sync_forecasts, sync_early_detail
  
  
 __author__ = "Mustafa Prodhan"
@@ -14,6 +14,9 @@ class Command(BaseCommand):
         p.add_argument("--watch", action="store_true")
         p.add_argument("--interval", type=int, default=settings.CIVICAPI_POLL_SECONDS)
         p.add_argument("--early", action="store_true", help="also pull early-vote snapshots")
+        p.add_argument("--detail", action="store_true", help="store full early-vote JSON (states + counties)")
+        p.add_argument("--forecast", action="store_true", help="store civicAPI forecasts")
+        p.add_argument("--all", action="store_true", help="results + early + detail + forecast")
         p.add_argument("--param", action="append", default=[], help="k=v query param passed to the races endpoint")
  
     def handle(self, *a, **o):
@@ -25,7 +28,11 @@ class Command(BaseCommand):
             try:
                 stored, unmatched = sync_results(el, **params)
                 self.stdout.write(f"stored={stored} unmatched={len(unmatched)}")
-                if o["early"]:
+                if o["all"] or o["forecast"]:
+                    self.stdout.write("forecast stored=%s unmatched=%s" % sync_forecasts(el))
+                if o["all"] or o["detail"]:
+                    self.stdout.write(f"early_detail rows={sync_early_detail(el)}")
+                if o["early"] or o["all"]:
                     self.stdout.write(f"early_vote states={sync_early_vote(el)}")
             except Exception as exc:
                 self.stderr.write(f"sync failed: {exc!r}")

@@ -221,3 +221,4 @@ class MapApp:
 def run(year=2026):
     root = tk.Tk()
     MapApp(root, year)
+    root.mainloop()
