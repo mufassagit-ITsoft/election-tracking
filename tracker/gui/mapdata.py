@@ -1,10 +1,11 @@
 # Map data for the GUI and read from SQLite. 
-__author__ = "Mustafa Prodhan"
 
 import math
 
 from tracker.models import (CandidateResult, EarlyVoteSnapshot, Election, Forecast, MapShape,
                             Race, ResultSnapshot)
+
+__author__ = "Mustafa Prodhan"
 
 NO_DATA = "#d4d4d4"
 TOSSUP = "#e0bb24"
