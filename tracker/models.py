@@ -35,6 +35,7 @@ class Race(models.Model):
     status_text = models.CharField(max_length=200, blank=True)
     candidates_text = models.TextField(blank=True) # human summary until live candidates arrive
     note = models.TextField(blank=True)
+    civic_updated = models.DateTimeField(null=True, blank=True) # How CivicAPI updates after a previous one.
 
     class Meta:
         unique_together = [("election", "office", "state", "district", "is_special")]
@@ -52,6 +53,8 @@ class Candidate(models.Model):
     name = models.CharField(max_length=120)
     party = models.CharField(max_length=40, blank=True)
     is_incumbent = models.BooleanField(default=False)
+    civic_id = models.BigIntegerField(null=True, blank=True) # CivicAPI candidate id
+    color = models.CharField(max_length=9, blank=True)
 
     class Meta:
         unique_together = [("race", "name")]
@@ -126,3 +129,49 @@ class SyncLog(models.Model):
  
     class Meta:
         ordering = ["-started_at"]
+
+class EarlyVoteRegion(models.Model):
+    # Early vote JSON data
+    election = models.ForeignKey(Election, on_delete=models.CASCADE, related_name="early_regions")
+    state = models.CharField(max_length=2)
+    region = models.CharField(max_length=80)
+    category = models.CharField(max_length=12)  # requested | returned | inperson | grace
+    party = models.CharField(max_length=30)     # Democratic | Republican | Other | Unspecified
+    votes = models.BigIntegerField(default=0)
+    snapshot_date = models.DateField()
+ 
+    class Meta:
+        unique_together = [("election", "state", "region", "category", "party", "snapshot_date")]
+        indexes = [models.Index(fields=["election", "state", "category", "snapshot_date"])]
+ 
+ 
+class Forecast(models.Model):
+    # civicAPI's own forecast per state (senate/governor) or district (house).
+    election = models.ForeignKey(Election, on_delete=models.CASCADE, related_name="forecasts")
+    office = models.CharField(max_length=20)
+    key = models.CharField(max_length=10)  # AK, or AZ-6 for House
+    rater = models.CharField(max_length=20, default="civicapi")
+    rating = models.CharField(max_length=30, blank=True)
+    dem_pct = models.FloatField(null=True, blank=True)
+    rep_pct = models.FloatField(null=True, blank=True)
+    ind_pct = models.FloatField(null=True, blank=True)
+    dem_name = models.CharField(max_length=120, blank=True)
+    rep_name = models.CharField(max_length=120, blank=True)
+    ind_name = models.CharField(max_length=120, blank=True)
+    incumbent_party = models.CharField(max_length=10, blank=True)
+    as_of = models.CharField(max_length=20, blank=True)
+    raw = models.JSONField(default=dict)
+ 
+    class Meta:
+        unique_together = [("election", "office", "key", "rater")]
+ 
+ 
+class MapShape(models.Model):
+    # Map geometry stored in SQLite so the GUI needs no files. 
+    layer = models.CharField(max_length=20)
+    key = models.CharField(max_length=10) # AZ, or AZ-6
+    name = models.CharField(max_length=60, blank=True)
+    geometry = models.JSONField() # GeoJSON geometry (states) or {"x":..,"y":..,"w":..} (tiles)
+ 
+    class Meta:
+        unique_together = [("layer", "key")]
