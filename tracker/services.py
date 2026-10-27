@@ -3,10 +3,11 @@ from datetime import date
 from pathlib import Path
  
 from django.db import transaction
- 
 from . import civicapi
-from .models import (Candidate, CandidateResult, EarlyVoteSnapshot, Election, Race, Rating,
-                     ResultSnapshot, SyncLog)
+from django.utils.dateparse import parse_datetime
+from . import geo
+from .models import (Candidate, CandidateResult, EarlyVoteRegion, EarlyVoteSnapshot, Election, Forecast,
+                     MapShape, Race, Rating, ResultSnapshot, SyncLog)
  
 __author__ = "Mustafa Prodhan"
 SEED_PATH = Path(__file__).parent / "seed" / "midterm_2026.json"
@@ -15,7 +16,7 @@ RATER_MAP = {"cook": 0, "sabato": 1, "inside": 2}
  
 @transaction.atomic
 def load_seed(path=SEED_PATH):
-    """Load the compiled 2026 midterm dataset (races, ratings, early vote baseline)."""
+    # Load the compiled 2026 midterm dataset (races, ratings, early vote baseline).
     s = json.loads(Path(path).read_text())
     e = s["election"]
     el, _ = Election.objects.get_or_create(
@@ -81,7 +82,7 @@ def _find_race(el, n):
  
 @transaction.atomic
 def apply_races_payload(el, payload):
-    """Store one ResultSnapshot per matched race. Returns (stored, unmatched)."""
+    # Store one ResultSnapshot per matched race. Returns (stored, unmatched).
     stored, unmatched = 0, []
     for item in civicapi.extract_races(payload):
         n = civicapi.normalize_race(item)
@@ -111,7 +112,7 @@ def sync_results(el, **params):
  
  
 def sync_early_vote(el):
-    """Pull national early-vote snapshots (by state) and store one EarlyVoteSnapshot per state."""
+    # Pull national early-vote snapshots (by state) and store one EarlyVoteSnapshot per state.
     cats, as_of = {}, None
     for cat in ("requested", "returned", "inperson"):
         d = civicapi.fetch_early_vote(cat)
@@ -137,4 +138,85 @@ def sync_early_vote(el):
         n += 1
     SyncLog.objects.create(kind="early_vote", detail=f"states={n} as_of={as_of}")
     return n
+
+EARLY_CATEGORIES = ("requested", "returned", "inperson", "grace")
+
+def _store_early_regions(el, state, category, payload):
+    snap = payload.get("snapshot_date")
+    snap = date.fromisoformat(snap) if snap else date.today()
+    n = 0
+    for region, parties in (payload.get("regions") or {}).items():
+        for party, v in parties.items():
+            EarlyVoteRegion.objects.update_or_create(
+                election=el, state=state, region=region, category=category, party=party,
+                snapshot_date=snap, defaults={"votes": int(v.get("votes") or 0)})
+            n += 1
+    return n
  
+ 
+def sync_early_detail(el, states=None, progress=None):
+    """Store every early-vote category for the US (by state) and for each state (by county).
+    ~50 states x 4 categories of requests; run it a few times a day, not every poll."""
+    states = states or ["US"] + sorted(geo.TILE_GRID)
+    rows = 0
+    for st in states:
+        for cat in EARLY_CATEGORIES:
+            try:
+                rows += _store_early_regions(el, st, cat, civicapi.fetch_early_vote(cat, st))
+            except Exception as exc:  # one bad state must not stop the rest
+                SyncLog.objects.create(kind="early_detail", ok=False, detail=f"{st}/{cat}: {exc!r}"[:500])
+        if progress:
+            progress(st)
+    SyncLog.objects.create(kind="early_detail", detail=f"rows={rows} states={len(states)}")
+    return rows
+ 
+ 
+def sync_forecasts(el, offices=("senate", "governor", "house")):
+    # civicAPI's own forecast -> Forecast rows, and a Rating (rater='civicapi') on matching races.
+    n = unmatched = 0
+    for office in offices:
+        try:
+            data = civicapi.get("forecast", suffix=f"{office}/{el.year}/civicapi")
+        except Exception as exc:
+            SyncLog.objects.create(kind="forecast", ok=False, detail=f"{office}: {exc!r}"[:500])
+            continue
+        for key, e in (data.get("states") or data.get("districts") or {}).items():
+            st, _, dist = key.partition("-")
+            dist = dist.lstrip("0") if dist else ""
+            label = f"{st}-{dist}" if dist else st
+            Forecast.objects.update_or_create(
+                election=el, office=office, key=label, rater="civicapi",
+                defaults=dict(rating=e.get("rating", ""), dem_pct=e.get("democrat_pct"),
+                              rep_pct=e.get("republican_pct"), ind_pct=e.get("independent_pct"),
+                              dem_name=e.get("democratic", ""), rep_name=e.get("republican", ""),
+                              ind_name=e.get("independent", ""), incumbent_party=e.get("incumbent_party", ""),
+                              as_of=str(data.get("last_updated", "")), raw=e))
+            race = Race.objects.filter(election=el, office=office, state=st, district=dist).first()
+            if race and e.get("rating"):
+                Rating.objects.update_or_create(race=race, rater="civicapi", defaults=dict(
+                    rating=e["rating"], as_of=str(data.get("last_updated", ""))))
+                n += 1
+            else:
+                unmatched += 1
+    SyncLog.objects.create(kind="forecast", detail=f"stored={n} unmatched={unmatched}")
+    return n, unmatched
+ 
+ 
+def load_geo(el=None):
+    # Put map geometry in SQLite. 
+    n = 0
+    for st, name, g in geo.state_features():
+        MapShape.objects.update_or_create(layer="states", key=st, defaults={"name": name, "geometry": g})
+        n += 1
+    q = Race.objects.filter(office="house")
+    if el:
+        q = q.filter(election=el)
+    by_state = {}
+    for st, d in q.values_list("state", "district").distinct():
+        by_state.setdefault(st, []).append(d)
+    for st in by_state:
+        by_state[st].sort(key=lambda x: int(x) if x.isdigit() else 0)
+    for key, g in geo.house_tiles(by_state):
+        MapShape.objects.update_or_create(layer="house_tiles", key=key, defaults={"name": key, "geometry": g})
+        n += 1
+    return n

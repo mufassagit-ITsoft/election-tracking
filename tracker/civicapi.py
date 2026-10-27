@@ -68,7 +68,7 @@ def _bool(x):
  
  
 def normalize_race(item):
-    """-> dict with office/state/district/civic_id and cleaned candidate results."""
+    # dict with office/state/district/civic_id and cleaned candidate results.
     office_raw = str(pick(item, "office", "")).strip().lower()
     office = OFFICE_ALIASES.get(office_raw, "")
     state = str(pick(item, "state", "")).strip().upper()[:2]
@@ -108,7 +108,7 @@ def _is_general(item, date_iso):
  
  
 def fetch_general_races(date_iso):
-    """Paginated race/search per office type; keeps only general-election races on date_iso."""
+    # Paginated race/search per office type; keeps only general-election races on date_iso.
     out = []
     for types in settings.CIVICAPI_OFFICE_TYPES.values():
         for t in types:
