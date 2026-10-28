@@ -270,5 +270,6 @@ staticfiles/
 __pycache__/
 *.pyc
 .venv/
+*.docx
 
 # End of https://www.toptal.com/developers/gitignore/api/python,django

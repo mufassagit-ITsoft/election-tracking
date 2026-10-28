@@ -154,3 +154,5 @@ CIVICAPI_MAX_PAGES = int(os.environ.get("CIVICAPI_MAX_PAGES", "3"))
 CIVICAPI_PAGE_DELAY = float(os.environ.get("CIVICAPI_PAGE_DELAY", "0.5"))
 CIVICAPI_POLL_SECONDS = int(os.environ.get("CIVICAPI_POLL_SECONDS", "60"))
 CIVICAPI_IGNORE_PREELECTION = os.environ.get("CIVICAPI_IGNORE_PREELECTION", "1") not in ("0", "false")
+
+CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
