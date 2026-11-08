@@ -1,4 +1,3 @@
-
 from unittest import mock
  
 from django.test import TestCase, override_settings
@@ -70,6 +69,48 @@ class MapDataTests(TestCase):
         self.assertEqual(d["OH"]["fill"], md.R_SHADES[3])
  
  
+@override_settings(CIVICAPI_IGNORE_PREELECTION=False)
+class SeatTallyTests(TestCase):
+    def setUp(self):
+        self.el, _ = load_seed()
+ 
+    def _call(self):
+        apply_races_payload(self.el, {"races": [
+            {"id": "t1", "office": "Senate", "state": "OH", "candidates": [
+                {"name": "A", "party": "Republican", "votes": 5, "winner": True},
+                {"name": "B", "party": "Democratic", "votes": 1}]},
+            {"id": "t2", "office": "Senate", "state": "TX", "candidates": [
+                {"name": "C", "party": "Democratic", "votes": 9, "winner": True},
+                {"name": "D", "party": "Republican", "votes": 1}]},
+            {"id": "t3", "office": "Senate", "state": "ME", "candidates": [
+                {"name": "E", "party": "Independent", "votes": 9, "winner": True},
+                {"name": "F", "party": "Republican", "votes": 1}]},
+            {"id": "t4", "office": "Senate", "state": "GA", "candidates": [
+                {"name": "G", "party": "Democratic", "votes": 4},
+                {"name": "H", "party": "Republican", "votes": 3}]}]})
+ 
+    def test_senate_is_cumulative_with_independents_in_democrats(self):
+        sen0 = md.seat_tally(2026)["senate"]                       # nothing called: seats not up only
+        self.assertEqual((sen0["d"], sen0["r"], sen0["total"]), (34, 31, 100))
+        self._call()
+        sen = md.seat_tally(2026)["senate"]
+        self.assertEqual((sen["d"], sen["r"], sen["o"]), (36, 32, 0))   # 34 + TX + ME(independent), 31 + OH
+        self.assertEqual(sen["ind"], 3)                                  # 2 holdover independents + ME winner
+        self.assertEqual((sen["lead_d"], sen["called"], sen["up"], sen["pending"]), (1, 3, 35, 32))
+        self.assertEqual(sen["majority"], 51)
+ 
+    def test_governor_and_house(self):
+        gov = md.seat_tally(2026)["governor"]
+        self.assertEqual((gov["d"], gov["r"], gov["total"], gov["majority"]), (6, 8, 50, 26))
+        self.assertEqual(md.seat_tally(2026)["house"]["majority"], 218)   # house: seats won only, unchanged
+        self.assertEqual(md.seat_tally(2026)["house"]["d"], 0)
+ 
+    def test_holdover_override(self):
+        with mock.patch.dict("os.environ", {"SENATE_HOLDOVERS": "D=30,R=34,I=1"}):
+            sen = md.seat_tally(2026)["senate"]
+        self.assertEqual((sen["d"], sen["r"], sen["ind"], sen["total"], sen["majority"]), (31, 34, 1, 100, 51))
+ 
+ 
 class IngestTests(TestCase):
     def setUp(self):
         self.el, _ = load_seed()
@@ -88,3 +129,4 @@ class IngestTests(TestCase):
         self.assertEqual(Forecast.objects.get(key="OH").dem_pct, 50.5)
         self.assertTrue(Rating.objects.filter(rater="civicapi", race__state="OH").exists())
         self.assertEqual(EarlyVoteRegion.objects.filter(state="OH", category="returned").count(), 2)
+    

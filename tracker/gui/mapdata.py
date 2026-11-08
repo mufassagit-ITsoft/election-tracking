@@ -1,6 +1,9 @@
 # Map data for the GUI and read from SQLite. 
 
 import math
+import os
+ 
+from django.db.models import Max
  
 from tracker.models import (CandidateResult, EarlyVoteSnapshot, Election, Forecast, MapShape,
                             Race, ResultSnapshot)
@@ -54,7 +57,7 @@ def party_color(party, strength=3):
  
  
 def early_color(pct):
-    # Sequential green by early vote as % of 2024 final: 0% pale -> 100%+ dark.
+    """Sequential green by early vote as % of 2024 final: 0% pale -> 100%+ dark."""
     if pct is None:
         return NO_DATA
     t = max(0.0, min(pct / 100.0, 1.0))
@@ -74,7 +77,7 @@ def legend(mode):
             ("Likely R", R_SHADES[2]), ("Solid R", R_SHADES[3]), ("unrated", NO_DATA)]
  
  
-# projection 
+# ---- projection ----------------------------------------------------------------------------------
 class _Albers:
     def __init__(self, lat1, lat2, lat0, lon0):
         r = math.radians
@@ -98,7 +101,7 @@ def _rings(geom):
  
  
 def project_states():
-    # {postal: [[(x, y), ...], ...]} in abstract units, with AK and HI as insets under the west.
+    """-> {postal: [[(x, y), ...], ...]} in abstract units, with AK and HI as insets under the west."""
     raw = {s.key: _rings(s.geometry) for s in MapShape.objects.filter(layer="states")}
     out = {}
     for key, rings in raw.items():
@@ -130,20 +133,22 @@ def project_states():
  
  
 def tile_squares():
-    # {'AZ-3': (x, y, w)} in tile-grid units.
+    """-> {'AZ-3': (x, y, w)} in tile-grid units."""
     return {s.key: (s.geometry["x"], s.geometry["y"], s.geometry["w"])
             for s in MapShape.objects.filter(layer="house_tiles")}
  
  
-# data 
+# ---- data ----------------------------------------------------------------------------------------
 def _latest_snapshots(el, office):
-    seen, snaps = {}, []
-    for s in ResultSnapshot.objects.filter(race__election=el, race__office=office).order_by("race_id", "-fetched_at"):
-        if s.race_id not in seen:
-            seen[s.race_id] = s
-            snaps.append(s)
+    """-> ({race_id: newest snapshot}, {snapshot_id: [CandidateResult, ...]}).
+ 
+    Snapshots are append-only, so there are thousands per race by election night. Pick the newest id per race
+    in SQL and skip the big `raw` JSON column; never load the history."""
+    newest = (ResultSnapshot.objects.filter(race__election=el, race__office=office)
+              .values("race_id").annotate(last=Max("id")).values_list("last", flat=True))
+    seen = {s.race_id: s for s in ResultSnapshot.objects.filter(id__in=list(newest)).defer("raw")}
     res = {}
-    for c in CandidateResult.objects.filter(snapshot__in=snaps).order_by("-votes"):
+    for c in CandidateResult.objects.filter(snapshot_id__in=[s.id for s in seen.values()]).order_by("-votes"):
         res.setdefault(c.snapshot_id, []).append(c)
     return seen, res
  
@@ -161,7 +166,7 @@ def early_by_state(el):
  
  
 def layer_data(year, office, mode="rating", rater="cook"):
-    # {key: {'fill': '#rrggbb', 'tip': 'short text', 'race_id': int|None}} keyed by AZ or AZ-3.
+    """-> {key: {'fill': '#rrggbb', 'tip': 'short text', 'race_id': int|None}} keyed by AZ or AZ-3."""
     el = Election.objects.filter(year=year).first()
     if not el:
         return {}
@@ -251,7 +256,92 @@ def race_detail(race_id):
  
  
 def summary_line(year, office, mode, rater):
-    # Counts for the status bar.
+    """Counts for the status bar."""
     data = layer_data(year, office, mode, rater)
     called = sum(1 for v in data.values() if v["fill"] not in (NO_DATA,))
     return f"{len(data)} {office} races, {called} coloured"
+ 
+ 
+# ---- seat tracker --------------------------------------------------------------------------------
+CHAMBER_SIZE = {"senate": 100, "governor": 50, "house": 435}
+# Seats held going into the election. Senate/governor totals are cumulative: seats won tonight plus the seats
+# NOT up this year. D includes independents who caucus with the Democrats (Senate: Sanders, King).
+# base - (incumbents of the races on the ballot) = holdovers. Override with SENATE_HOLDOVERS / GOVERNOR_HOLDOVERS.
+BASE_COMPOSITION = {"senate": dict(D=47, R=53, I=2), "governor": dict(D=24, R=26, I=0)}
+MERGE_IND = ("senate", "governor")      # independents are counted with the Democrats in these chambers
+ 
+ 
+def _parse_holdovers(text):
+    """'D=34,R=31,I=2' -> {'D': 34, 'R': 31, 'O': 2}. Seats NOT up this year, added to the won totals."""
+    out = {"D": 0, "R": 0, "O": 0}
+    for part in (text or "").replace(";", ",").split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            k = k.strip().upper()[:1]
+            k = "O" if k == "I" else k
+            if k in out and v.strip().isdigit():
+                out[k] = int(v)
+    return out
+ 
+ 
+def _holdovers(office, races):
+    """-> ({'D','R','O'} seats not up, independents among them). Independents here are already inside D."""
+    env = os.environ.get(f"{office.upper()}_HOLDOVERS")
+    if env:
+        b = _parse_holdovers(env)
+        if office in MERGE_IND:
+            return dict(D=b["D"] + b["O"], R=b["R"], O=0), b["O"]
+        return b, 0
+    comp = BASE_COMPOSITION.get(office)
+    if not comp or not races:
+        return dict(D=0, R=0, O=0), 0
+    up = {"D": 0, "R": 0, "O": 0}
+    for r in races:
+        up[party_side(r.incumbent_party) or "O"] += 1
+    return dict(D=max(0, comp["D"] - up["D"] - up["O"]), R=max(0, comp["R"] - up["R"]), O=0), comp["I"]
+ 
+ 
+def seat_tally(year):
+    """-> {office: {...}}: seats each party holds after tonight = seats won (called) + seats not up.
+ 
+    d / r / o   Democratic / Republican / other. Senate and governor fold independents into d (ind = how many).
+                The House keeps o separate and only counts the seats won.
+    lead_*      races not yet called where a candidate of that party currently leads
+    up / called / pending   races on the ballot, called so far, still open
+    total / majority        seats counted and the majority mark (only when the whole chamber is counted)
+    """
+    el = Election.objects.filter(year=year).first()
+    out = {}
+    for office in OFFICES:
+        races = list(Race.objects.filter(election=el, office=office)) if el else []
+        snaps, results = _latest_snapshots(el, office) if el else ({}, {})
+        base, base_ind = _holdovers(office, races)
+        won, lead, called = {"D": 0, "R": 0, "O": 0}, {"D": 0, "R": 0, "O": 0}, 0
+        for r in races:
+            s = snaps.get(r.id)
+            if not s:
+                continue
+            cands = results.get(s.id, [])
+            party = s.winner_party
+            if s.called and not party:
+                w = next((c for c in cands if c.is_winner or c.name == s.winner_name), None)
+                party = w.party if w else ""
+            if s.called and party:
+                won[party_side(party) or "O"] += 1
+                called += 1
+            elif not s.called and cands and (cands[0].votes or 0) > 0:
+                lead[party_side(cands[0].party) or "O"] += 1
+        merge = office in MERGE_IND
+        ind = (won["O"] + base_ind) if merge else 0
+        if merge:                                        # independents caucus with the Democrats
+            won["D"] += won["O"]
+            lead["D"] += lead["O"]
+            won["O"] = lead["O"] = 0
+        total = len(races) + sum(base.values())
+        full = total == CHAMBER_SIZE[office]
+        out[office] = dict(d=won["D"] + base["D"], r=won["R"] + base["R"], o=won["O"] + base["O"], ind=ind,
+                           lead_d=lead["D"], lead_r=lead["R"], lead_o=lead["O"],
+                           up=len(races), called=called, pending=len(races) - called,
+                           total=total, majority=(total // 2 + 1) if full else None)
+    return out
+ 
